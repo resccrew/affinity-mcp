@@ -16,6 +16,8 @@ from .result import Err, Ok, Result
 
 DEFAULT_MAX_SIDE = 1280
 BUTTONS = ("left", "right", "middle")
+MODIFIERS = ("command", "shift", "option", "ctrl")
+FIELD_FOCUS_WAIT = 0.35
 
 
 class Screen(Protocol):
@@ -31,6 +33,11 @@ class Screen(Protocol):
     def paste_text(self, text: str) -> None: ...
     def activate_app(self, name: str) -> Result[None]: ...
     def focus_app(self, name: str) -> None: ...  # bring to front only if another app took focus
+    def key_down(self, key: str) -> None: ...
+    def key_up(self, key: str) -> None: ...
+    def wait(self, seconds: float) -> None: ...
+    def menu(self, app: str, path: list[str]) -> Result[None]: ...
+    def menu_items(self, app: str, path: list[str]) -> Result[list[str]]: ...
 
 
 @dataclass(frozen=True)
@@ -72,9 +79,26 @@ def to_screen_point(screen: Screen, state: ScreenState, x: int, y: int) -> Resul
     return Ok((round(x * screen_w / state.image_width), round(y * screen_h / state.image_height)))
 
 
-def click(screen: Screen, state: ScreenState, x: int, y: int, button: str = "left") -> Result[str]:
+def click(screen: Screen, state: ScreenState, x: int, y: int, button: str = "left",
+          modifiers: list[str] | None = None) -> Result[str]:
     if button not in BUTTONS:
         return Err(f"button must be one of {', '.join(BUTTONS)}")
+    modifiers = modifiers or []
+    bad = [m for m in modifiers if m not in MODIFIERS]
+    if bad:
+        return Err(f"unknown modifiers {bad}; use {', '.join(MODIFIERS)}")
+    if modifiers:
+        point = to_screen_point(screen, state, x, y)
+        if isinstance(point, Err):
+            return point
+        for key in modifiers:
+            screen.key_down(key)
+        try:
+            screen.click(*point.value, button)
+        finally:
+            for key in reversed(modifiers):
+                screen.key_up(key)
+        return Ok(f"{'+'.join(modifiers)}+{button}-clicked at ({x}, {y})")
     point = to_screen_point(screen, state, x, y)
     if isinstance(point, Err):
         return point
@@ -148,3 +172,76 @@ def open_app(screen: Screen, name: str) -> Result[str]:
         return opened
     return Ok(f"{name} is in front")
 
+
+
+def set_field(screen: Screen, state: ScreenState, x: int, y: int, value: str) -> Result[str]:
+    """Replace the value of a numeric/text field at (x, y) and commit it with Enter."""
+    point = to_screen_point(screen, state, x, y)
+    if isinstance(point, Err):
+        return point
+    if value == "":
+        return Err("value is empty")
+    screen.double_click(*point.value)
+    screen.wait(FIELD_FOCUS_WAIT)
+    screen.hotkey("command", "a")
+    screen.paste_text(value)
+    screen.press("enter")
+    screen.wait(FIELD_FOCUS_WAIT)
+    return Ok(f"set field at ({x}, {y}) to {value}")
+
+
+def _check_menu_path(path: list[str], allow_empty: bool = False) -> Result[None]:
+    if not path and not allow_empty:
+        return Err("path is empty, e.g. [\"Vector\", \"Geometry\", \"Add\"]")
+    if any(not p or '"' in p or "\\" in p for p in path):
+        return Err("menu names must be non-empty and contain no quotes or backslashes")
+    return Ok(None)
+
+
+def menu(screen: Screen, app: str, path: list[str]) -> Result[str]:
+    checked = _check_menu_path(path)
+    if isinstance(checked, Err):
+        return checked
+    done = screen.menu(app, path)
+    if isinstance(done, Err):
+        return done
+    return Ok(f"menu {' > '.join(path)}")
+
+
+def menu_items(screen: Screen, app: str, path: list[str]) -> Result[str]:
+    checked = _check_menu_path(path, allow_empty=True)
+    if isinstance(checked, Err):
+        return checked
+    items = screen.menu_items(app, path)
+    if isinstance(items, Err):
+        return items
+    return Ok(", ".join(items.value))
+
+
+def batch(screen: Screen, state: ScreenState, app: str, steps: list[dict]) -> Result[str]:
+    """Run steps in order, stop at the first failure. Each step is {"action": ..., **args}."""
+    if not steps:
+        return Err("steps is empty")
+    actions = {
+        "click": lambda a: click(screen, state, a["x"], a["y"], a.get("button", "left"), a.get("modifiers")),
+        "double_click": lambda a: double_click(screen, state, a["x"], a["y"]),
+        "drag": lambda a: drag(screen, state, a["x1"], a["y1"], a["x2"], a["y2"], a.get("duration", 0.3)),
+        "type": lambda a: type_text(screen, a["text"], a.get("press_enter", False)),
+        "key": lambda a: press_key(screen, a["key"]),
+        "hotkey": lambda a: hotkey(screen, a["keys"]),
+        "scroll": lambda a: scroll(screen, state, a["amount"], a.get("x"), a.get("y")),
+        "field": lambda a: set_field(screen, state, a["x"], a["y"], str(a["value"])),
+        "menu": lambda a: menu(screen, app, a["path"]),
+        "wait": lambda a: (screen.wait(float(a["seconds"])), Ok(f"waited {a['seconds']}s"))[1],
+    }
+    for i, step in enumerate(steps, 1):
+        name = step.get("action")
+        if name not in actions:
+            return Err(f"step {i}: unknown action {name!r}; use {', '.join(actions)}")
+        try:
+            result = actions[name](step)
+        except KeyError as missing:
+            return Err(f"step {i} ({name}): missing argument {missing}")
+        if isinstance(result, Err):
+            return Err(f"step {i} ({name}): {result.error}")
+    return Ok(f"ran {len(steps)} steps")

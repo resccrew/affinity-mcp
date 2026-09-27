@@ -23,6 +23,10 @@ Python 3.13, uv, `mcp` 2.x SDK (`MCPServer`), pyautogui + Pillow, pytest + pytes
 - Text typed via clipboard + cmd+v (Cyrillic/emoji), old clipboard restored; pbcopy with UTF-8 LANG.
 - Nothing may print to stdout: it is the MCP protocol channel.
 
+- Speed: `batch` runs many steps per call (one screenshot); `menu` goes through System Events
+  (exact, no menu-bar clicks, which open Mission Control); `set_field` waits 0.35s so the panel re-focuses.
+  Server INSTRUCTIONS hold the Affinity cheat-sheet (Tab hides panels, Enter opens Move/Duplicate...).
+
 ## Coding rules
 Early returns, `Result` instead of raising; never modify existing tests to make them pass.
 
@@ -31,4 +35,5 @@ macOS only; controls the real mouse/keyboard; full-screen screenshots go to the 
 welcome-screen tiles ignore single synthetic clicks (use Cmd+N).
 
 ## Status
+- 2026-09-28: fast tools (batch/menu/list_menu/set_field/modifier clicks), 29 tests; logo drawn live with them.
 - 2026-09-27: 22 tests green, published as public repo, live-tested (new doc, rectangle via drag).

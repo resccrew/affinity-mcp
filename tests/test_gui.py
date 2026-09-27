@@ -54,6 +54,22 @@ class FakeScreen:
     def paste_text(self, text):
         self.calls.append(("paste", text))
 
+    def key_down(self, key):
+        self.calls.append(("key_down", key))
+
+    def key_up(self, key):
+        self.calls.append(("key_up", key))
+
+    def wait(self, seconds):
+        pass
+
+    def menu(self, app, path):
+        self.calls.append(("menu", app, *path))
+        return Err("no such menu") if path[-1] == "Nope" else Ok(None)
+
+    def menu_items(self, app, path):
+        return Ok(["Add", "Subtract"])
+
     def focus_app(self, name):
         self.calls.append(("focus", name))
 
@@ -249,3 +265,59 @@ async def test_every_action_and_screenshot_refocuses_affinity(screen):
     await gui_server.mcp.call_tool("drag", {"x1": 0, "y1": 0, "x2": 640, "y2": 400, "screenshot_after": False})
     assert screen.focused == ["Affinity", "Affinity"]
     assert screen.calls[-1] == ("drag", 0, 0, 720, 450, 0.5)
+
+
+def test_click_with_modifiers_holds_and_releases_keys(screen):
+    state, _ = shoot(screen)
+    assert isinstance(gui_core.click(screen, state, 640, 400, modifiers=["command", "shift"]), Ok)
+    assert screen.calls == [("key_down", "command"), ("key_down", "shift"), ("click", 720, 450, "left"),
+                            ("key_up", "shift"), ("key_up", "command")]
+    assert isinstance(gui_core.click(screen, state, 1, 1, modifiers=["hyper"]), Err)
+
+
+def test_set_field_replaces_and_commits(screen):
+    state, _ = shoot(screen)
+    assert isinstance(gui_core.set_field(screen, state, 640, 400, "1024"), Ok)
+    assert screen.calls == [("double_click", 720, 450), ("hotkey", "command", "a"),
+                            ("paste", "1024"), ("press", "enter")]
+
+
+def test_menu_rejects_quotes_and_empty_path(screen):
+    assert isinstance(gui_core.menu(screen, "Affinity", []), Err)
+    assert isinstance(gui_core.menu(screen, "Affinity", ['Vec"tor']), Err)
+    assert screen.calls == []
+    assert gui_core.menu(screen, "Affinity", ["Vector", "Geometry", "Add"]) == Ok("menu Vector > Geometry > Add")
+
+
+def test_batch_runs_steps_and_stops_at_first_error(screen):
+    state, _ = shoot(screen)
+    result = gui_core.batch(screen, state, "Affinity", [
+        {"action": "key", "key": "esc"},
+        {"action": "field", "x": 640, "y": 400, "value": 5},
+        {"action": "menu", "path": ["Vector", "Nope"]},
+        {"action": "key", "key": "never"},
+    ])
+    assert isinstance(result, Err) and result.error.startswith("step 3 (menu)")
+    assert ("press", "never") not in screen.calls and ("paste", "5") in screen.calls
+
+
+def test_batch_reports_unknown_action_and_missing_args(screen):
+    state, _ = shoot(screen)
+    assert "unknown action" in gui_core.batch(screen, state, "A", [{"action": "fly"}]).error
+    assert "missing argument" in gui_core.batch(screen, state, "A", [{"action": "click", "x": 1}]).error
+    assert isinstance(gui_core.batch(screen, state, "A", []), Err)
+
+
+async def test_batch_tool_returns_one_screenshot(screen):
+    await gui_server.mcp.call_tool("screenshot", {})
+    result = await gui_server.mcp.call_tool("batch", {"steps": [
+        {"action": "click", "x": 640, "y": 400, "modifiers": ["command"]},
+        {"action": "hotkey", "keys": ["command", "j"]},
+    ]})
+    assert [b.type for b in result.content] == ["text", "image"]
+    assert "ran 2 steps" in result.content[0].text
+
+
+async def test_list_menu_tool(screen):
+    result = await gui_server.mcp.call_tool("list_menu", {"path": ["Vector", "Geometry"]})
+    assert result.content[0].text == "Add, Subtract"
