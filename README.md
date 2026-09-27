@@ -20,6 +20,12 @@ Layout). You don't need API keys or plugins.
 | `press_key` | One key: `enter`, `esc`, `tab`, `v` (Move tool), `m` (Rectangle)... |
 | `hotkey` | Key combo, e.g. `["command", "n"]` new document, `["command", "z"]` undo |
 | `scroll` | Scroll, optionally over a given point |
+| `set_field` | Set a panel field (X/Y/W/H, colour hex...) and commit it |
+| `menu` | Choose any menu item by path, e.g. `["Vector","Geometry","Add"]`, with no clicks |
+| `list_menu` | List menu names, so the model can find the exact path |
+| `batch` | Run many steps in one call and return one screenshot at the end, which is the fast path |
+
+`click` also accepts `modifiers` (e.g. `["command"]` for multi-select).
 
 Every action returns a fresh screenshot by default (`screenshot_after=false` turns it off).
 Before every action the server brings Affinity back to the front, so the terminal can't take the clicks.

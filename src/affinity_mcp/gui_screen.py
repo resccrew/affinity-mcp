@@ -103,6 +103,27 @@ class MacScreen:
             if previous:  # empty = clipboard held no text (image, files): pbcopy can't restore that anyway
                 subprocess.run(["pbcopy"], input=previous, encoding="utf-8", env=UTF8_ENV)
 
+    def key_down(self, key: str) -> None:
+        self._input().keyDown(key)
+
+    def key_up(self, key: str) -> None:
+        self._gui().keyUp(key)  # always release, even if permissions changed meanwhile
+
+    def wait(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def menu(self, app: str, path: list[str]) -> Result[None]:
+        done = _system_events(app, f"click {_menu_ref(path)}")
+        return done if isinstance(done, Err) else Ok(None)
+
+    def menu_items(self, app: str, path: list[str]) -> Result[list[str]]:
+        ref = f"menu 1 of {_menu_ref(path)}" if path else "menu bar 1"
+        target = "menu bar items" if not path else "menu items"
+        done = _system_events(app, f"get name of every {target[:-1]} of {ref}")
+        if isinstance(done, Err):
+            return done
+        return Ok([n.strip() for n in done.value.split(",") if n.strip() and n.strip() != "missing value"])
+
     def focus_app(self, name: str) -> None:
         front = subprocess.run(
             ["osascript", "-e", 'tell application "System Events" to get name of first process whose frontmost is true'],
@@ -120,3 +141,19 @@ class MacScreen:
         subprocess.run(["osascript", "-e", f'tell application "{name}" to activate'], capture_output=True)
         time.sleep(APP_START_WAIT)
         return Ok(None)
+
+
+def _menu_ref(path: list[str]) -> str:
+    ref = f'menu bar item "{path[0]}" of menu bar 1'
+    for name in path[1:]:
+        ref = f'menu item "{name}" of menu 1 of {ref}'
+    return ref
+
+
+def _system_events(app: str, command: str) -> Result[str]:
+    """Menus via Accessibility: exact, no clicks on the menu bar (those can open Mission Control)."""
+    script = f'tell application "System Events" to tell process "{app}" to {command}'
+    done = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+    if done.returncode != 0:
+        return Err(f"menu failed: {done.stderr.strip()} (use list_menu to see the exact names)")
+    return Ok(done.stdout.strip())
